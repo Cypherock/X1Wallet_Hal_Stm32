@@ -975,6 +975,53 @@ ret_code_t adafruit_pn532_command_write(uint8_t * p_cmd, uint8_t cmd_len)
     return STM_SUCCESS;
 }
 
+// Define CIU_RFCfg constants
+#define CIU_RFCFG_ADDRESS             0x6316
+#define RF_LEVEL_AMP_ON               0x80 // Bit 7 to enable amplifier
+#define RF_GAIN_DEFAULT               0x20 // Bits 6-4 for gain: 100 = 33 dB (default)
+#define RF_SENSITIVITY_DEFAULT        0x08 // Bits 3-0 for sensitivity: 1000 (default)
+
+/**
+ * @brief Configures the CIU_RFCfg register to set RF sensitivity and gain.
+ *
+ * @param rf_level_amp Enable RF amplifier (1: On, 0: Off).
+ * @param rx_gain      Receiver gain value (3 bits: 0-7, e.g., 0x4 for 33 dB).
+ * @param rf_level     RF sensitivity value (4 bits: 0-15, e.g., 0x8 for default sensitivity).
+ * @return STM_SUCCESS if successful, or an error code otherwise.
+ */
+static ret_code_t adafruit_pn532_config_rf(uint8_t rf_level_amp, uint8_t rx_gain, uint8_t rf_level)
+{
+    // Ensure parameters are within valid ranges
+    if ((rx_gain > 0x7) || (rf_level > 0xF)) {
+        return NFC_INVALID_PARAM;
+    }
+
+    // Prepare the CIU_RFCfg register value
+    uint8_t config_value = 0;
+    config_value |= (rf_level_amp ? RF_LEVEL_AMP_ON : 0);  // Set amplifier bit
+    config_value |= ((rx_gain & 0x7) << 4);               // Set gain bits
+    config_value |= (rf_level & 0xF);                     // Set sensitivity bits
+
+    // Prepare the command to write to the CIU_RFCfg register
+    m_pn532_packet_buf[0] = 0x8;
+    m_pn532_packet_buf[1] = (CIU_RFCFG_ADDRESS >> 8) & 0xFF; // High byte of address
+    m_pn532_packet_buf[2] = CIU_RFCFG_ADDRESS & 0xFF;        // Low byte of address
+    m_pn532_packet_buf[3] = config_value;
+
+    // Send the command to the PN532
+    ret_code_t err_code = adafruit_pn532_cmd_send(m_pn532_packet_buf, 4, SHORT_TIMEOUT);
+    if (err_code != STM_SUCCESS) {
+        return err_code;
+    }
+
+    // Wait for the PN532 to process the command
+    if (!adafruit_pn532_waitready_ms(PN532_DEFAULT_WAIT_FOR_READY_TIMEOUT)) {
+        return NFC_TIME_OUT;
+    }
+
+    return STM_SUCCESS;
+}
+
 
 /** Function for enabling or disabling the PN532 RF field.
  *
@@ -996,6 +1043,12 @@ static ret_code_t adafruit_pn532_field_switch(uint8_t field_conf)
         return NFC_INVALID_PARAM;
     }
 
+    // Configure CIU_RFCfg with default sensitivity and gain
+    err_code = adafruit_pn532_config_rf(1, 0x7, 0x8); // Amplifier ON, gain 33 dB, sensitivity 1000
+    if (err_code != STM_SUCCESS) {
+        return err_code;
+    }
+    
     m_pn532_packet_buf[0] = PN532_COMMAND_RFCONFIGURATION;
     m_pn532_packet_buf[1] = RFCONFIGURATION_CFGITEM_RFFIELD;
     m_pn532_packet_buf[2] = field_conf;
